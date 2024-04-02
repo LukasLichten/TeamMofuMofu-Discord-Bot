@@ -17,9 +17,7 @@ import (
 )
 
 var (
-	query      = flag.String("query", "Google", "Search term")
-	maxResults = flag.Int64("max-results", 25, "Max YouTube results")
-	channelId = flag.String("channel-id", "UCQ00k_ZIuvbUyFgsfy_1DAQ", "Id of the channel we subscribe to")
+	// channelId = flag.String("channel-id", "UCQ00k_ZIuvbUyFgsfy_1DAQ", "Id of the channel we subscribe to")
 )
 
 func main() {
@@ -63,13 +61,13 @@ func main() {
 	// ForUsername and ForHandle are broken, and do not work
 	// ManagedByMe will return an Auth error
 	// Mine however for some god forsaken reason works
-	call := service.Channels.List([]string{"id", "snippet", "statistics", "contentDetails"}).
-		Mine(true)
+	// call := service.Channels.List([]string{"id", "snippet", "statistics", "contentDetails"}).
+	// 	Mine(true)
 
+	call := service.LiveBroadcasts.List([]string{"id", "snippet", "contentDetails", "status"}).
+		Mine(true).
+		MaxResults(25)
 	
-	// call := service.Search.List([]string{"id", "snippet"}).
-	// 	Q(*query).
-	// 	MaxResults(*maxResults)
 	response, err := call.Do()
 	handleError(err, "")
 
@@ -82,28 +80,35 @@ func main() {
 
 	fmt.Printf("%v: %v\n", response.ServerResponse.HTTPStatusCode, response.PageInfo.TotalResults)
 	
-	if len(response.Items) > 0 {
-		channels[response.Items[0].Id] = response.Items[0].Snippet.Title
-		fmt.Printf("%v\n", response.Items[0].Statistics.SubscriberCount)
-		fmt.Printf("%v\n", response.Items[0].ContentDetails.RelatedPlaylists.WatchLater)
-	}
+	// if len(response.Items) > 0 {
+	// 	channels[response.Items[0].Id] = response.Items[0].Snippet.Title
+	// 	fmt.Printf("%v\n", response.Items[0].Statistics.SubscriberCount)
+	// 	fmt.Printf("%v\n", response.Items[0].ContentDetails.RelatedPlaylists.WatchLater)
+	// }
 
 	// Iterate through each item and add it to the correct list.
-	// for _, item := range response.Items {
-	// 	switch item.Id.Kind {
-	// 	case "youtube#video":
-	// 		videos[item.Id.VideoId] = item.Snippet.Title
-	// 	case "youtube#channel":
-	// 		channels[item.Id.ChannelId] = item.Snippet.Title
-	// 	case "youtube#playlist":
-	// 		playlists[item.Id.PlaylistId] = item.Snippet.Title
-	// 	}
-	// }
+	for _, item := range response.Items {
+		text := fmt.Sprintf("%v, %v: %v", item.Snippet.ScheduledStartTime, item.Status.LifeCycleStatus, item.Snippet.Title)
+		videos[item.Id] = text
+	}
 
 	printIDs("Videos", videos)
 	printIDs("Channels", channels)
 	printIDs("Playlists", playlists)
 }
+
+// Print the ID and title of each result in a list as well as a name that
+// identifies the list. For example, print the word section name "Videos"
+// above a list of video search results, followed by the video ID and title
+// of each matching video.
+func printIDs(sectionName string, matches map[string]string) {
+	fmt.Printf("%v:\n", sectionName)
+	for id, title := range matches {
+		fmt.Printf("[%v] %v\n", id, title)
+	}
+	fmt.Printf("\n\n")
+}
+
 
 // Exchange the authorization code for an access token
 func exchangeToken(config *oauth2.Config, code string) (*oauth2.Token, error) {
@@ -162,17 +167,6 @@ func saveToken(file string, token *oauth2.Token) {
 	}
 	defer f.Close()
 	json.NewEncoder(f).Encode(token)
-}
-// Print the ID and title of each result in a list as well as a name that
-// identifies the list. For example, print the word section name "Videos"
-// above a list of video search results, followed by the video ID and title
-// of each matching video.
-func printIDs(sectionName string, matches map[string]string) {
-	fmt.Printf("%v:\n", sectionName)
-	for id, title := range matches {
-		fmt.Printf("[%v] %v\n", id, title)
-	}
-	fmt.Printf("\n\n")
 }
 
 
