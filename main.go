@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	// "time"
 	"path/filepath"
 
 	"golang.org/x/oauth2"
@@ -18,6 +19,41 @@ import (
 
 var (
 	// channelId = flag.String("channel-id", "UCQ00k_ZIuvbUyFgsfy_1DAQ", "Id of the channel we subscribe to")
+)
+
+type KnownStream struct {
+	Id string `json:"id"`
+
+	Status string `json:"status"`
+	
+	StartTime uint64 `json:"startTime"`
+
+}
+
+type Persist struct {
+	Streams map[string]KnownStream `json:"streams"`
+}
+
+
+	//   "lifeCycleStatusUnspecified" - No value or the value is unknown.
+	//   "created" - Incomplete settings, but otherwise valid
+	//   "ready" - Complete settings
+	//   "testing" - Visible only to partner, may need special UI treatment
+	//   "live" - Viper is recording; this means the "clock" is running
+	//   "complete" - The broadcast is finished.
+	//   "revoked" - This broadcast was removed by admin action
+	//   "testStarting" - Transition into TESTING has been requested
+	//   "liveStarting" - Transition into LIVE has been requested
+const (
+	StatusUnknown		string	= "lifeCycleStatusUnspecified"
+	StatusCreated			= "created"
+	StatusReady			= "ready"
+	StatusTestingStarting		= "testStarting"
+	StatusTesting			= "testing"
+	StatusLiveStarting		= "liveStarting"
+	StatusLive			= "live"
+	StatusComplete			= "complete"
+	StatusRevoked			= "revoked"
 )
 
 func main() {
@@ -64,6 +100,14 @@ func main() {
 	// call := service.Channels.List([]string{"id", "snippet", "statistics", "contentDetails"}).
 	// 	Mine(true)
 
+	// if len(response.Items) > 0 {
+	// 	channels[response.Items[0].Id] = response.Items[0].Snippet.Title
+	// 	fmt.Printf("%v\n", response.Items[0].Statistics.SubscriberCount)
+	// 	fmt.Printf("%v\n", response.Items[0].ContentDetails.RelatedPlaylists.WatchLater)
+	// }
+
+	
+
 	call := service.LiveBroadcasts.List([]string{"id", "snippet", "contentDetails", "status"}).
 		Mine(true).
 		MaxResults(25)
@@ -72,39 +116,62 @@ func main() {
 	handleError(err, "")
 
 	// Group video, channel, and playlist results in separate lists.
-	videos := make(map[string]string)
-	channels := make(map[string]string)
-	playlists := make(map[string]string)
-
+	// videos := make(map[string]KnownStream)
+	data,err := persistFromFile("persist/data.json")
+	if err != nil {
+		data = &Persist { Streams: make(map[string]KnownStream) }
+	}
 
 
 	fmt.Printf("%v: %v\n", response.ServerResponse.HTTPStatusCode, response.PageInfo.TotalResults)
 	
-	// if len(response.Items) > 0 {
-	// 	channels[response.Items[0].Id] = response.Items[0].Snippet.Title
-	// 	fmt.Printf("%v\n", response.Items[0].Statistics.SubscriberCount)
-	// 	fmt.Printf("%v\n", response.Items[0].ContentDetails.RelatedPlaylists.WatchLater)
-	// }
 
 	// Iterate through each item and add it to the correct list.
 	for _, item := range response.Items {
-		text := fmt.Sprintf("%v, %v: %v", item.Snippet.ScheduledStartTime, item.Status.LifeCycleStatus, item.Snippet.Title)
-		videos[item.Id] = text
+		
+		
+		data.Streams[item.Id] = KnownStream{ Status: item.Status.LifeCycleStatus, StartTime: 0, Id: item.Id }
 	}
 
-	printIDs("Videos", videos)
-	printIDs("Channels", channels)
-	printIDs("Playlists", playlists)
+	printIDs("videos", data.Streams)
+	savePersist("persist/data.json", *data)
+
+}
+
+
+// tokenFromFile retrieves a Token from a given file path.
+// It returns the retrieved Token and any read error encountered.
+func persistFromFile(file string) (*Persist, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	t := &Persist{} 
+	err = json.NewDecoder(f).Decode(t)
+	defer f.Close()
+	return t, err
+}
+
+// saveToken uses a file path to create a file and store the
+// token in it.
+func savePersist(file string, persist Persist) {
+	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		log.Fatalf("Unable to cache oauth token: %v", err)
+	}
+	defer f.Close()
+	json.NewEncoder(f).Encode(persist)
 }
 
 // Print the ID and title of each result in a list as well as a name that
 // identifies the list. For example, print the word section name "Videos"
 // above a list of video search results, followed by the video ID and title
 // of each matching video.
-func printIDs(sectionName string, matches map[string]string) {
+func printIDs(sectionName string, matches map[string]KnownStream) {
 	fmt.Printf("%v:\n", sectionName)
-	for id, title := range matches {
-		fmt.Printf("[%v] %v\n", id, title)
+	for id, info := range matches {
+		text := fmt.Sprintf("%v, %v: %v", info.StartTime, info.Status, info.Id)
+		fmt.Printf("[%v] %v\n", id, text)
 	}
 	fmt.Printf("\n\n")
 }
