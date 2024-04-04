@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"path/filepath"
@@ -25,7 +28,9 @@ var (
 	persistFilePath = flag.String("persist-file-path", "persist/data.json", "allows the bot to ressume function after restart")
 	secretFile = flag.String("secret-file", "client_secret.json", "google-api secretes file")
 	tokenPath = flag.String("token-path", "persist/.credentials", "google-api token credentials folder")
-
+	useRedirectServer = flag.Bool("use-redirect-server", false, "enable using a redirect server instead of copying a token into stdin")
+	redirectUrl = flag.String("redirect-url", "http://localhost:2434", "the address from which you can reach the redirect server from your browser (when performing the login)")
+	redirectPort = flag.String("redirect-port", "2434", "port on which the oauth receiver server starts up (if set)")
 )
 
 type KnownStream struct {
@@ -82,7 +87,6 @@ func main() {
 		log.Fatalf("Unable to parse client secret file to config: %v", err)
 	}
 	
-	config.RedirectURL = "urn:ietf:wg:oauth:2.0:oob"
 
 	cacheFile, err := tokenCacheFile()
 	if err != nil {
@@ -90,11 +94,42 @@ func main() {
 	}
 	tok, err := tokenFromFile(cacheFile)
 	if err != nil {
-		authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+		// Checking the Env to see if we should use the server and what values
+		// Only is USE_REDIRECT_SERVER is set we will read the others (and override and command passed in values)
+		// Because argument passing with docker sucks, and the redirect server is required for docker, we allow env to override args
+		// However we only override for those actually set
+		val := strings.ToLower(os.Getenv("USE_REDIRECT_SERVER"))
+		if val == "1" || val == "true" {
+			*useRedirectServer = true
+			
+			val, exists := os.LookupEnv("REDIRECT_URL")
+			if exists {
+				*redirectUrl = val
+			}
+
+			val, exists = os.LookupEnv("REDIRECT_PORT")
+			if exists {
+				*redirectPort = val
+			}
+		}
+		
+
+		if *useRedirectServer {
+			config.RedirectURL = *redirectUrl
+			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+			fmt.Println("Trying to get token from web")
+			tok, err = getTokenFromWeb(config, authURL)
+		} else {
+			config.RedirectURL = "urn:ietf:wg:oauth:2.0:oob"
+			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 			fmt.Println("Trying to get token from prompt")
 			tok, err = getTokenFromPrompt(config, authURL)
+		}
+
 		if err == nil {
 			saveToken(cacheFile, tok)
+		} else {
+			log.Fatalf("Unable to retrieve Token, aborting: %v", err.Error())
 		}
 	}
 	client := config.Client(ctx, tok)
@@ -111,7 +146,12 @@ func main() {
 	}
 
 	if *discordWebhook == "" {
-		log.Fatalf("No webhook provided, shutting down!")
+		val := os.Getenv("DISCORD_WEBHOOK")
+		if val == "" {
+			log.Fatalf("No webhook provided, shutting down!")
+		}
+
+		*discordWebhook = val
 	}
 	
 	discord.WebhookURL = *discordWebhook
@@ -209,21 +249,22 @@ func execute(data *Persist, service *youtube.Service) {
 			}
 
 
+
 			if postMain {
 				msg := fmt.Sprintf("Lukas going live at <t:%v:f> (in <t:%v:R>)\nhttps://youtu.be/%v", value.StartTime, value.StartTime, value.Id)
-				discord.Post(discord.PostOptions{ Content: msg })
+				handleError(discord.Post(discord.PostOptions{ Content: msg }),"Discord-API error:")
 				log.Printf("Stream %v got scheduled\n", value.Id)
 
 				time.Sleep(time.Second) // Prevent weird dublication due to low throughput on discord webhook
 			}
 			if postLive {
-				discord.Post(discord.PostOptions{ Content: "Live now @here" })
+				handleError(discord.Post(discord.PostOptions{ Content: "Live now @here" }), "Discord-API error:")
 				log.Printf("Stream %v is live!\n", value.Id)
 
 				time.Sleep(time.Second)
 			}
 			if postComplete {
-				discord.Post(discord.PostOptions{ Content: "Stream Is Over, VOD shall remain, as always" })
+				handleError(discord.Post(discord.PostOptions{ Content: "Stream Is Over, VOD shall remain, as always" }), "Discord-API error:")
 				log.Printf("Stream %v has ended\n", value.Id)
 
 				time.Sleep(time.Second)
@@ -331,6 +372,43 @@ func getTokenFromPrompt(config *oauth2.Config, authURL string) (*oauth2.Token, e
 	}
 	fmt.Println(authURL)
 	return exchangeToken(config, code)
+}
+
+// getTokenFromWeb uses Config to request a Token.
+// It returns the retrieved Token.
+func getTokenFromWeb(config *oauth2.Config, authURL string) (*oauth2.Token, error) {
+	codeCh, err := startWebServer()
+	if err != nil {
+		fmt.Printf("Unable to start a web server.%v\n", err.Error())
+		return nil, err
+	}
+
+	fmt.Println("Go to the following link in your browser. After completing the programm will continue")
+	fmt.Println(authURL)
+
+	// Wait for the web server to get the code.
+	code := <-codeCh
+	return exchangeToken(config, code)
+}
+
+// startWebServer starts a web server that listens on http://localhost:8080.
+// The webserver waits for an oauth code in the three-legged auth flow.
+func startWebServer() (codeCh chan string, err error) {
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v",*redirectPort))
+	if err != nil {
+		return nil, err
+	}
+	codeCh = make(chan string)
+
+	go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		code := r.FormValue("code")
+		codeCh <- code // send code to OAuth flow
+		listener.Close()
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "Received code: %v\r\nYou can now safely close this browser window.", code)
+	}))
+
+	return codeCh, nil
 }
 
 // tokenCacheFile generates credential file path/filename.

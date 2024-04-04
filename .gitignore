@@ -1,3 +1,5 @@
 /target
 *secret*
 persist
+docker
+tmm-discord-bot

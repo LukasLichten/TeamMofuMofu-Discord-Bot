@@ -1,0 +1,16 @@
+services:
+  tmm-discord-bot:
+    # Normally you would use build: . here, however Docker is retarded, and then refuses to pass the enviroment variable into the container
+    # So just run make docker before make docker-up and you will be fine
+    image: tmm-discord-bot
+    volumes:
+      - ./docker/persist:/app/persist
+      - ./docker/client_secret.json:/app/client_secret.json
+    environment:
+      # - DISCORD_WEBHOOK=[insert your webhook]
+      - USE_REDIRECT_SERVER=TRUE
+      - REDIRECT_URL=http://localhost:2434
+      - REDIRECT_PORT=2434
+    ports:
+      - 2434:2434
+    restart: unless-stopped
