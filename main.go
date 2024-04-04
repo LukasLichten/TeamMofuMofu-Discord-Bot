@@ -6,11 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"os"
-	// "time"
+	"time"
+
 	"path/filepath"
 
+	"github.com/ecnepsnai/discord"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -18,7 +21,11 @@ import (
 )
 
 var (
-	// channelId = flag.String("channel-id", "UCQ00k_ZIuvbUyFgsfy_1DAQ", "Id of the channel we subscribe to")
+	discordWebhook = flag.String("discord-webhook", "", "Discord Webhook (required)")
+	persistFilePath = flag.String("persist-file-path", "persist/data.json", "allows the bot to ressume function after restart")
+	secretFile = flag.String("secret-file", "client_secret.json", "google-api secretes file")
+	tokenPath = flag.String("token-path", "persist/.credentials", "google-api token credentials folder")
+
 )
 
 type KnownStream struct {
@@ -26,12 +33,15 @@ type KnownStream struct {
 
 	Status string `json:"status"`
 	
-	StartTime uint64 `json:"startTime"`
+	StartTime int64 `json:"startTime"`
 
 }
 
 type Persist struct {
 	Streams map[string]KnownStream `json:"streams"`
+
+	NextTime int64 `json:"nextTime"`
+	NextId *string `json:"nextId,omitempty"`
 }
 
 
@@ -58,10 +68,11 @@ const (
 
 func main() {
 	flag.Parse()
+	log.Println("Starting up...")
 
 	ctx := context.Background()
 
-	b, err := os.ReadFile("client_secrets.json")
+	b, err := os.ReadFile(*secretFile)
 	if err != nil {
 		log.Fatalf("Unable to read client secret file: %v", err)
 	}
@@ -93,51 +104,172 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error creating new YouTube client: %v", err)
 	}
-
-	// ForUsername and ForHandle are broken, and do not work
-	// ManagedByMe will return an Auth error
-	// Mine however for some god forsaken reason works
-	// call := service.Channels.List([]string{"id", "snippet", "statistics", "contentDetails"}).
-	// 	Mine(true)
-
-	// if len(response.Items) > 0 {
-	// 	channels[response.Items[0].Id] = response.Items[0].Snippet.Title
-	// 	fmt.Printf("%v\n", response.Items[0].Statistics.SubscriberCount)
-	// 	fmt.Printf("%v\n", response.Items[0].ContentDetails.RelatedPlaylists.WatchLater)
-	// }
-
 	
-
-	call := service.LiveBroadcasts.List([]string{"id", "snippet", "contentDetails", "status"}).
-		Mine(true).
-		MaxResults(25)
-	
-	response, err := call.Do()
-	handleError(err, "")
-
-	// Group video, channel, and playlist results in separate lists.
-	// videos := make(map[string]KnownStream)
-	data,err := persistFromFile("persist/data.json")
+	data,err := persistFromFile(*persistFilePath)
 	if err != nil {
 		data = &Persist { Streams: make(map[string]KnownStream) }
 	}
 
-
-	fmt.Printf("%v: %v\n", response.ServerResponse.HTTPStatusCode, response.PageInfo.TotalResults)
+	if *discordWebhook == "" {
+		log.Fatalf("No webhook provided, shutting down!")
+	}
 	
-
-	// Iterate through each item and add it to the correct list.
-	for _, item := range response.Items {
-		
-		
-		data.Streams[item.Id] = KnownStream{ Status: item.Status.LifeCycleStatus, StartTime: 0, Id: item.Id }
+	discord.WebhookURL = *discordWebhook
+	
+	if data.NextId == nil {
+		data.NextTime = math.MaxInt64
 	}
 
-	printIDs("videos", data.Streams)
-	savePersist("persist/data.json", *data)
+	log.Println("Setup complete, entering loop...")
 
+	for {
+		execute(data, service)
+
+		// log.Println("Debug: execute run")
+		savePersist(*persistFilePath, *data)
+
+		comparison := time.Now().Add(time.Minute * 5).UTC().Unix()
+
+		if comparison > data.NextTime {
+			// A Stream is soon starting/live, so we will only sleep a short duration
+			time.Sleep(time.Second * 15)
+		} else {
+			// No new stream soon, we will sleep longer
+			time.Sleep(time.Minute * 5)
+		}
+	}
 }
 
+func execute(data *Persist, service *youtube.Service) {
+	call := service.LiveBroadcasts.List([]string{"id", "snippet", "contentDetails", "status"}).
+		Mine(true).
+		MaxResults(5)
+	
+	response, err := call.Do()
+	if err != nil {
+		log.Printf("Error in calling the YT-API: %v\n", err.Error())
+		return;
+	}
+
+	for i := len(response.Items) - 1; i >= 0; i-- {
+		item := response.Items[i]
+		start, err := time.Parse(time.RFC3339, item.Snippet.ScheduledStartTime)
+		startStamp := int64(0)
+		if err == nil {
+			startStamp = start.UTC().Unix()
+		}
+
+		value, existed := data.Streams[item.Id]
+		if !existed {
+			value = KnownStream{ Status: StatusUnknown, StartTime: startStamp, Id: item.Id }	
+		}
+
+		// Update if the status has changed
+		if startStamp != value.StartTime {
+			// Updating the starttime, maybe if I want to update the timestamp in the OG message
+			value.StartTime = startStamp
+		}
+		if newStatus := item.Status.LifeCycleStatus; value.Status != newStatus {
+			// Update the state and do messages accordingly
+			postMain, postLive, postComplete := false, false, false
+
+			switch newStatus {
+			case StatusUnknown: break
+			case StatusCreated: break
+			case StatusRevoked: break
+			case StatusReady:
+				postMain = true
+				break
+			case StatusTestingStarting: fallthrough
+			case StatusTesting:
+				if value.Status != StatusReady && value.Status != StatusTestingStarting {
+					postMain = true
+				}
+				break
+			case StatusLiveStarting: fallthrough
+			case StatusLive:
+				if value.Status == StatusLiveStarting {
+					break
+				}
+				if value.Status != StatusReady && value.Status != StatusTestingStarting && value.Status != StatusTesting {
+					postMain = true
+				}
+				postLive = true
+				break
+			case StatusComplete:
+				if value.Status != StatusLive && value.Status != StatusLiveStarting {
+					// We could do the live post, but this is pointless, as the stream is already offline
+					if value.Status != StatusReady && value.Status != StatusTestingStarting && value.Status != StatusTesting {
+						postMain = true
+					}
+				}
+
+				postComplete = true
+				break
+			}
+
+
+			if postMain {
+				msg := fmt.Sprintf("Lukas going live at <t:%v:f> (in <t:%v:R>)\nhttps://youtu.be/%v", value.StartTime, value.StartTime, value.Id)
+				discord.Post(discord.PostOptions{ Content: msg })
+				log.Printf("Stream %v got scheduled\n", value.Id)
+
+				time.Sleep(time.Second) // Prevent weird dublication due to low throughput on discord webhook
+			}
+			if postLive {
+				discord.Post(discord.PostOptions{ Content: "Live now @here" })
+				log.Printf("Stream %v is live!\n", value.Id)
+
+				time.Sleep(time.Second)
+			}
+			if postComplete {
+				discord.Post(discord.PostOptions{ Content: "Stream Is Over, VOD shall remain, as always" })
+				log.Printf("Stream %v has ended\n", value.Id)
+
+				time.Sleep(time.Second)
+			}
+
+
+
+			value.Status = item.Status.LifeCycleStatus
+		}
+
+		// Setting the next Stream timestamp
+		switch value.Status {
+		case StatusUnknown: fallthrough
+		case StatusCreated: fallthrough
+		case StatusRevoked: 
+			break
+		case StatusReady: fallthrough
+		case StatusTestingStarting: fallthrough
+		case StatusTesting: fallthrough
+		case StatusLiveStarting: fallthrough
+		case StatusLive:
+			if data.NextTime >= value.StartTime {
+				data.NextId = &value.Id
+				data.NextTime = value.StartTime
+			}
+			// should not be nil, as it would otherwise set in the if above
+			if *data.NextId == value.Id && data.NextTime != value.StartTime {
+				data.NextTime = value.StartTime
+			}
+			break
+		case StatusComplete:
+			if data.NextId == nil {
+				break
+			}
+			if *data.NextId == value.Id {
+				// Clean up
+				data.NextTime = math.MaxInt64
+				data.NextId = nil
+			}
+			break
+		}
+
+
+		data.Streams[item.Id] = value
+	}
+}
 
 // tokenFromFile retrieves a Token from a given file path.
 // It returns the retrieved Token and any read error encountered.
@@ -204,7 +336,7 @@ func getTokenFromPrompt(config *oauth2.Config, authURL string) (*oauth2.Token, e
 // tokenCacheFile generates credential file path/filename.
 // It returns the generated credential path/filename.
 func tokenCacheFile() (string, error) {
-	tokenCacheDir := "persist/.credentials"
+	tokenCacheDir := *tokenPath
 	os.MkdirAll(tokenCacheDir, 0700)
 	return filepath.Join(tokenCacheDir,
 		url.QueryEscape("youtube-go.json")), nil
