@@ -73,6 +73,17 @@ const (
 
 func main() {
 	flag.Parse()
+	if *discordWebhook == "" {
+		val := os.Getenv("DISCORD_WEBHOOK")
+		if val == "" {
+			log.Fatalf("No webhook provided, shutting down!")
+		}
+
+		*discordWebhook = val
+	}
+	
+	discord.WebhookURL = *discordWebhook
+
 	log.Println("Starting up...")
 
 	ctx := context.Background()
@@ -145,16 +156,6 @@ func main() {
 		data = &Persist { Streams: make(map[string]KnownStream) }
 	}
 
-	if *discordWebhook == "" {
-		val := os.Getenv("DISCORD_WEBHOOK")
-		if val == "" {
-			log.Fatalf("No webhook provided, shutting down!")
-		}
-
-		*discordWebhook = val
-	}
-	
-	discord.WebhookURL = *discordWebhook
 	
 	if data.NextId == nil {
 		data.NextTime = math.MaxInt64
