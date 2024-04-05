@@ -22,8 +22,19 @@ These values (and additionally the `--token-path`, `--persist-file-path` and `--
 Besides that you need to aquire a google API client_secret.json.  
 Create a new project, add the You Tube Data API v3 to the available services.  
 Configure a OAuth-Autherication screen, select the youtube-readonly api, add your google account to the test users. App can remain in testing.  
-Create a new OAuth Client-ID, select Desktopapp, as the webapp will not be able to generate the authication key for... reasons...  
+Create a new OAuth Client-ID, select Desktopapp (this is fine if you are doing localhost deployments)  
 Then download the json and you just need a folder path for persist  
   
 First setup will demand signing into yt account, it will print a link into the log output, open it in your browser and sign in.  
 If everything goes right you get redirected at the end and the bot will spin up, if you end up on a 404 then the Redirect Url is incorrect.  
+  
+### So, you are not doing localhost...
+So you choose hell, so you need:
+- Some sort of Domain (duckdns is sufficient)
+- some way of generating tls certificates and applying them before rerouting to the container (caddy can do this, I deploy in k3s, so add an IngressRoute)
+- the reroute can be to a local only dns subdomain (so you don't need to expose it to the internet, just remember to add a record to your local DNS)
+- A new OAuth Client-ID that is a webapp, press edit on it, and then add the redirect url as a new Domain under Reroute URI
+- Go back to the OAuth-Autherication screen config, edit it, and make sure your domain is included in the Authoriced domains (the value there is without any subdomain, this is correct) and press through to save
+- Now you can download the json for the OAuth (if you downloaded it before adding a redirect you would need to edit the json to add any redirect to it, without redirect_uri within the json the program just fails)
+- Don't forget to update `REDIRECT_URL`
+- If it still returns 400: missmatch_redirect_uri then wait (because sometimes they take a long time), retrace your steps, curse at the sky and then just go to bed and hope it magically works tomorrow
