@@ -7,7 +7,7 @@ Currently only serves to post Live notifications from Youtube using Google API
 - And only one webhook
 - If you set up the bot it will repost the 5 most recent streams
 - But it will persist what it posted
-- The persist/data.json automatically cleaned, so indefinitly grows (by only a handful of bytes per stream though)
+- The persist/data.json is not automatically cleaned, so indefinitly grows (by only a handful of bytes per stream though)
 - It's update interval is once every 5min, except when there is a stream scheduled strating <5min or live, then every 15s
 - If you have multiple streams scheduled then the Going Live message is put underneath the most recently scheduled stream (which is not necessarily the live one)
 - PRIVATE and UNLISTED streams will be announced (and linked) too!
@@ -27,6 +27,11 @@ Then download the json and you just need a folder path for persist
   
 First setup will demand signing into yt account, it will print a link into the log output, open it in your browser and sign in.  
 If everything goes right you get redirected at the end and the bot will spin up, if you end up on a 404 then the Redirect Url is incorrect.  
+  
+This bot will work with your App still in Testing, however the token will expire after 7 days,
+requiring you to clear the persist/.credentials and log in again.  
+Best publish the app on the OAuth-Autherication screen. It will tell you they will ask you for a bunch of information,
+this is currently not needed, verification is optional.
   
 ### So, you are not doing localhost...
 So you choose hell, so you need:

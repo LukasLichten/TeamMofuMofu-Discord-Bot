@@ -103,7 +103,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Unable to get path to cached credential file. %v", err)
 	}
-	tok, err := tokenFromFile(cacheFile)
+	token, err := tokenFromFile(cacheFile)
 	if err != nil {
 		// Checking the Env to see if we should use the server and what values
 		// Only is USE_REDIRECT_SERVER is set we will read the others (and override and command passed in values)
@@ -129,21 +129,21 @@ func main() {
 			config.RedirectURL = *redirectUrl
 			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 			fmt.Println("Trying to get token from web")
-			tok, err = getTokenFromWeb(config, authURL)
+			token, err = getTokenFromWeb(config, authURL)
 		} else {
 			config.RedirectURL = "urn:ietf:wg:oauth:2.0:oob"
 			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
 			fmt.Println("Trying to get token from prompt")
-			tok, err = getTokenFromPrompt(config, authURL)
+			token, err = getTokenFromPrompt(config, authURL)
 		}
 
 		if err == nil {
-			saveToken(cacheFile, tok)
+			saveToken(cacheFile, token)
 		} else {
 			log.Fatalf("Unable to retrieve Token, aborting: %v", err.Error())
 		}
 	}
-	client := config.Client(ctx, tok)
+	client := config.Client(ctx, token)
 
 	service, err := youtube.NewService(ctx, option.WithHTTPClient(client))
 
@@ -164,6 +164,7 @@ func main() {
 	log.Println("Setup complete, entering loop...")
 
 	for {
+		
 		execute(data, service)
 
 		// log.Println("Debug: execute run")
