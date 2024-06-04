@@ -127,12 +127,12 @@ func main() {
 
 		if *useRedirectServer {
 			config.RedirectURL = *redirectUrl
-			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 			fmt.Println("Trying to get token from web")
 			token, err = getTokenFromWeb(config, authURL)
 		} else {
 			config.RedirectURL = "urn:ietf:wg:oauth:2.0:oob"
-			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+			authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.ApprovalForce)
 			fmt.Println("Trying to get token from prompt")
 			token, err = getTokenFromPrompt(config, authURL)
 		}
